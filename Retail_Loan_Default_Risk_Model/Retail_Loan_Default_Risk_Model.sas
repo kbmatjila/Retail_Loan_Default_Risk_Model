@@ -1,65 +1,83 @@
-﻿proc import datafile = "C:\Users\karab\Downloads\Retail_Loan_Default_Risk_Model\credit_risk_dataset.csv"
+﻿title "RETAIL LOAN DEFAULT RISK MODEL - Karabo Matjila";
+
+proc import datafile = "C:\Users\karab\Downloads\Retail_Loan_Default_Risk_Model\credit_risk_dataset.csv"
     out = loan_data
     dbms = csv
     replace;
     getnames = yes;
 run;
 
-
+proc odstext;
+    p "DATA CLEANING" / style=[font_size=18pt font_weight=bold];
+run;
+/*============================================================================*/
 /* CHECK FOR DUPLICATE OBSERVATIONS                                           */
+/*============================================================================*/
+
 proc sort data=loan_data
-    out=loan_data_sorted
-    nodupkey
-    dupout=duplicate_rows;
-    by _all_;
+out=loan_data_sorted
+nodupkey
+dupout=duplicate_rows;
+by _all_;
 run;
 
 proc sql;
-    select count(*) as duplicate_count
-    from duplicate_rows;
+title "Duplicate Values";
+select count(*) as duplicate_count
+from duplicate_rows;
 quit;
 
-
-/*==========================UNDERSTANDING THE DATA==============================*/
+/*============================================================================*/
+/* UNDERSTANDING THE DATA                                                     */
+/*============================================================================*/
 
 proc means data=loan_data n nmiss mean median min max;
+title "Understanding the Distribution of the Data (Needs to be cleaned)";
 run;
 
-
-/*==========================REMOVE DUPLICATE VALUES==============================*/
-
+/*============================================================================*/
+/* REMOVE DUPLICATE VALUES                                                    */
+/*============================================================================*/
 proc sort data=loan_data
-    out=data_clean
-    nodupkey;
-    by _all_;
+out=data_clean
+nodupkey;
+by _all_;
 run;
 
-
-/*==========================IMPUTING MISSING AND EXTREME VALUES==============================*/
+/*============================================================================*/
+/* IMPUTING MISSING AND EXTREME VALUES                                        */
+/*============================================================================*/
 
 data data_clean;
-    set data_clean;
+set data_clean;
 
-/*===============USE MEDIANS TO IMPUTE BECAUSE WE ARE DEALING WITH SKEWED DATA================*/
+/*============================================================================*/
+/* USE MEDIANS TO IMPUTE BECAUSE WE ARE DEALING WITH SKEWED DATA              */
+/*============================================================================*/
 
-    if missing(person_emp_length) then person_emp_length = 4;
-    if missing(loan_int_rate) then loan_int_rate = 10.99;
+if missing(person_emp_length) then person_emp_length = 4;
+if missing(loan_int_rate) then loan_int_rate = 10.99;
 
-    if person_emp_length = 123 then person_emp_length = 4;
-    if person_age > 100 then person_age = 26;
+if person_emp_length = 123 then person_emp_length = 4;
+if person_age > 100 then person_age = 26;
 
 run;
 
-
-/*==========================FINAL CHECK==============================*/
+/*============================================================================*/
+/* FINAL CHECK                                                                */
+/*============================================================================*/
 
 proc means data=data_clean n nmiss mean median min max;
+title "Final Check (Cleaned)";
 run;
-/*==========================DONE WITH CLEANING THE DATA==============================*/
 
 
-
-/*==========================EXPLORATORY DATA ANALYSIS==============================*/
+/*============================================================================*/
+/* EXPLORATORY DATA ANALYSIS                                                  */
+/*============================================================================*/
+proc odstext;
+    p "EXPLORATORY DATA ANALYSIS" / style=[font_size=18pt font_weight=bold];
+run;
 
 /*WE ARE CHECKING WHERE DO PEOPLE WHO DEFAULT THE MOST STAY*/ 
 proc sql;
@@ -172,94 +190,21 @@ proc odstext;
 p "CONCLUSION: LOAN PERCENT INCOME APPEARS TO BE ASSOCIATED WITH DEFAULT. BORROWERS WHO DEFAULT TEND TO HAVE A HIGHER LOAN BURDEN RELATIVE TO THEIR INCOME THAN BORROWERS WHO DO NOT DEFAULT. THIS SUGGESTS THAT THE SIZE OF A LOAN RELATIVE TO A BORROWER'S INCOME MAY BE USEFUL WHEN ASSESSING DEFAULT RISK.";
 run;
 
-/*WE ARE CHECKING WHETHER INTEREST RATE IS ASSOCIATED WITH DEFAULT*/
-proc sql;
-create table interest_default as
-select 
-loan_status,
-mean(loan_int_rate) as avg_interest_rate
-from data_clean
-group by loan_status;
-quit;
-
-proc sgplot data=interest_default;
-title "Interest Rate vs Default Status";
-vbar loan_status / response=avg_interest_rate datalabel;
-yaxis label="Average Interest Rate (%)";
-xaxis label="Default Status";
-run;
-
-/*CONCLUSION*/
-proc odstext;
-p "CONCLUSION: INTEREST RATE APPEARS TO BE ASSOCIATED WITH DEFAULT. BORROWERS WHO DEFAULT TEND TO HAVE HIGHER INTEREST RATES THAN BORROWERS WHO DO NOT DEFAULT. THIS SUGGESTS THAT INTEREST RATE MAY CONTAIN INFORMATION ABOUT THE RISK LEVEL OF A LOAN.";
-run;
-
-
-/*WE ARE CHECKING WHETHER DEFAULT RATE CHANGES ACROSS DIFFERENT INCOME LEVELS*/
-data income_groups;
-set data_clean;
-
-if person_income < 30000 then income_group = "Under 30k";
-else if person_income < 50000 then income_group = "30k-50k";
-else if person_income < 75000 then income_group = "50k-75k";
-else if person_income < 100000 then income_group = "75k-100k";
-else income_group = "100k+";
-run;
-
-proc sql;
-create table income_default as
-select 
-income_group,
-mean(loan_status) * 100 as default_rate
-from income_groups
-group by income_group;
-quit;
-
-proc sgplot data=income_default;
-title "Income Group vs Default Rate (%)";
-vbar income_group / response=default_rate datalabel;
-yaxis label="Default Rate (%)";
-xaxis label="Income Group";
-run;
-
-proc odstext;
-p "CONCLUSION: INCOME APPEARS TO BE ASSOCIATED WITH DEFAULT. BORROWERS IN THE LOWER INCOME GROUPS HAVE HIGHER OBSERVED DEFAULT RATES, WHILE DEFAULT RATES GENERALLY DECREASE AS INCOME INCREASES. THIS SUGGESTS THAT INCOME MAY PROVIDE USEFUL INFORMATION WHEN ASSESSING DEFAULT RISK.";
-run;
-
-
-/*====================================================MODEL FITTING (LOGISTIC REGRESSION)=========================================================*/
-
-ods select ParameterEstimates
- 	 	   Association;
-
-proc logistic data=data_clean;
-    
-class person_home_ownership (ref="MORTGAGE") loan_intent (ref="PERSONAL") loan_grade (ref="A") cb_person_default_on_file (ref="N");
-        
-model loan_status(event="1") =
-        person_age
-        person_income
-        person_home_ownership
-        person_emp_length
-        loan_intent
-        loan_grade
-        loan_amnt
-        loan_int_rate
-        loan_percent_income
-        cb_person_default_on_file
-        cb_person_cred_hist_length;       
-run;
-ods select all;
-
+/*============================================================================*/
+/* MODEL FITTING (LOGISTIC REGRESSION)                                         */
+/*============================================================================*/
 
 /* SPLIT DATA INTO TRAINING AND TESTING SETS */
 /* 70% TRAINING, 30% TESTING */
-
+proc odstext;
+    p "SPLIT DATA INTO TRAINING AND TESTING SETS" / style=[font_size=18pt font_weight=bold];
+run;
 proc surveyselect data=data_clean
 out=data_split
 samprate=0.7
 outall
 seed=2026;
+title "Splitting the Data";
 run;
 
 
@@ -274,88 +219,88 @@ run;
 
 /* FIT LOGISTIC REGRESSION USING TRAINING DATA */
 /* THE MODEL LEARNS FROM THE TRAINING DATA ONLY */
-
-ods select ParameterEstimates
- 	 	   Association;
+proc odstext;
+    p "FITTING THE LOGISTIC REGRESSION MODEL" / style=[font_size=18pt font_weight=bold];
+run;
+ods select ParameterEstimates Association;
 
 proc logistic data=train;
-	title "Training Dataset";
-    class
-        person_home_ownership (ref="MORTGAGE")
-        loan_intent (ref="PERSONAL")
-        loan_grade (ref="A")
-        cb_person_default_on_file (ref="N");
+title "Building a Logistic Regression Model using The Training Data";
+class
+person_home_ownership (ref="MORTGAGE")
+loan_intent (ref="PERSONAL")
+loan_grade (ref="A")
+cb_person_default_on_file (ref="N");
 
-    model loan_status(event="1") =
-        person_age
-        person_income
-        person_home_ownership
-        person_emp_length
-        loan_intent
-        loan_grade
-        loan_amnt
-        loan_int_rate
-        loan_percent_income
-        cb_person_default_on_file
-        cb_person_cred_hist_length;
+model loan_status(event="1") =
+person_age
+person_income
+person_home_ownership
+person_emp_length
+loan_intent
+loan_grade
+loan_amnt
+loan_int_rate
+loan_percent_income
+cb_person_default_on_file
+cb_person_cred_hist_length;
 
 run;
 ods select all;
 
 /* APPLY THE TRAINED MODEL TO THE TEST DATA */
 /* CREATE PREDICTED PROBABILITIES OF DEFAULT */
-ods select ParameterEstimates
- 	 	   Association;
+ods select ParameterEstimates Association;
 
 proc logistic data=train;
+title "Applying the Training Model to the Testing Data";
+class
+person_home_ownership (ref="MORTGAGE")
+loan_intent (ref="PERSONAL")
+loan_grade (ref="A")
+cb_person_default_on_file (ref="N");
 
-    class
-        person_home_ownership (ref="MORTGAGE")
-        loan_intent (ref="PERSONAL")
-        loan_grade (ref="A")
-        cb_person_default_on_file (ref="N");
+model loan_status(event="1") =
+person_age
+person_income
+person_home_ownership
+person_emp_length
+loan_intent
+loan_grade
+loan_amnt
+loan_int_rate
+loan_percent_income
+cb_person_default_on_file
+cb_person_cred_hist_length;
 
-    model loan_status(event="1") =
-        person_age
-        person_income
-        person_home_ownership
-        person_emp_length
-        loan_intent
-        loan_grade
-        loan_amnt
-        loan_int_rate
-        loan_percent_income
-        cb_person_default_on_file
-        cb_person_cred_hist_length;
-
-    score data=test out=test_predictions;
+score data=test out=test_predictions;
     
 run;
 ods select all;
 
-
-/*====================================================METRICS=========================================================*/
 
 /*============================================================================*/
 /* APPLY 30% PROBABILITY CUTOFF                                               */
 /*============================================================================*/
 
 data cutoff_predictions;
-    set test_predictions;
+set test_predictions;
 
-    /* 30% cutoff */
-    if P_1 >= 0.30 then pred_30 = 1;
-    else pred_30 = 0;
+/* 30% cutoff */
+if P_1 >= 0.30 then pred_30 = 1;
+else pred_30 = 0;
 run;
 
 
 /*============================================================================*/
 /* CONFUSION MATRIX                                                           */
 /*============================================================================*/
-
+proc odstext;
+    p "CONFUSION MATRIX" / style=[font_size=18pt font_weight=bold];
+run;
 proc freq data=cutoff_predictions;
-    tables loan_status * pred_30 / norow nocol nopercent;
-    title "Confusion Matrix - 30% Cutoff";
+tables loan_status * pred_30 / norow nocol nopercent;
+title "Confusion Matrix";
 run;
 
 proc odstext;
@@ -363,96 +308,86 @@ p "I initially used the standard 50% cutoff, but I noticed the sensitivity was r
 run;
 
 /*============================================================================*/
-/* CALCULATE PERFORMANCE METRICS                                              */
+/* EXTRACTING CONFUSION MATRIX VALUES                                         */
 /*============================================================================*/
 
 proc sql;
-    create table model_metrics_counts as
-    select
-        sum(case when loan_status = 0 and pred_30 = 0 then 1 else 0 end) as TN,
-        sum(case when loan_status = 0 and pred_30 = 1 then 1 else 0 end) as FP,
-        sum(case when loan_status = 1 and pred_30 = 0 then 1 else 0 end) as FN,
-        sum(case when loan_status = 1 and pred_30 = 1 then 1 else 0 end) as TP
-    from cutoff_predictions;
+create table model_metrics_counts as
+select
+sum(case when loan_status = 0 and pred_30 = 0 then 1 else 0 end) as TN,
+sum(case when loan_status = 0 and pred_30 = 1 then 1 else 0 end) as FP,
+sum(case when loan_status = 1 and pred_30 = 0 then 1 else 0 end) as FN,
+sum(case when loan_status = 1 and pred_30 = 1 then 1 else 0 end) as TP
+from cutoff_predictions;
 quit;
 
 
 /*============================================================================*/
-/* CALCULATE METRICS                                                          */
+/* CALCULATE PERFOMANCE METRICS                                               */
 /*============================================================================*/
 
 data model_metrics;
-    set model_metrics_counts;
+set model_metrics_counts;
 
-    Accuracy    = (TP + TN) / (TN + FP + FN + TP);
-    Sensitivity = TP / (TP + FN);
-    Specificity = TN / (TN + FP);
-    Precision   = TP / (TP + FP);
+Accuracy    = (TP + TN) / (TN + FP + FN + TP);
+Sensitivity = TP / (TP + FN);
+Specificity = TN / (TN + FP);
+Precision   = TP / (TP + FP);
 
-    format Accuracy Sensitivity Specificity Precision percent8.2;
+format Accuracy Sensitivity Specificity Precision percent8.2;
 run;
 
 
 /*============================================================================*/
-/* DISPLAY PERFORMANCE METRICS                                                 */
+/* DISPLAY PERFORMANCE METRICS                                                */
 /*============================================================================*/
-
+proc odstext;
+    p "PERFOMANCE METRICS" / style=[font_size=18pt font_weight=bold];
+run;
 proc print data=model_metrics noobs;
-    var Accuracy Sensitivity Specificity Precision;
-    title "Loan Default Model Performance Metrics - 30% Cutoff";
+var Accuracy Sensitivity Specificity Precision;
+title "Loan Default Model Performance Metrics";
 run;
 
 
 /*============================================================================*/
-/* INTERPRETATION                                                              */
+/* INTERPRETATION                                                             */
 /*============================================================================*/
 
 proc odstext;
-    p "ACCURACY: Measures the proportion of all borrowers that the model classified correctly. Using a 30% probability cutoff, the model correctly classifies approximately 84% of borrowers in the test data.";
+p "ACCURACY: Measures the proportion of all borrowers that the model classified correctly. Using a 30% probability cutoff, the model correctly classifies approximately 84% of borrowers in the test data.";
 
-    p "SENSITIVITY/RECALL: Measures how well the model identifies borrowers who actually default. Using a 30% probability cutoff, the model identifies approximately 73% of borrowers who actually default.";
+p "SENSITIVITY/RECALL: Measures how well the model identifies borrowers who actually default. Using a 30% probability cutoff, the model identifies approximately 73% of borrowers who actually default.";
 
-    p "SPECIFICITY: Measures how well the model identifies borrowers who do not default. Using a 30% probability cutoff, the model correctly identifies approximately 88% of borrowers who do not default.";
+p "SPECIFICITY: Measures how well the model identifies borrowers who do not default. Using a 30% probability cutoff, the model correctly identifies approximately 88% of borrowers who do not default.";
 
-    p "PRECISION: Measures how often the model is correct when it predicts that a borrower will default. Using a 30% probability cutoff, approximately 62% of borrowers predicted to default actually default.";
+p "PRECISION: Measures how often the model is correct when it predicts that a borrower will default. Using a 30% probability cutoff, approximately 62% of borrowers predicted to default actually default.";
 
-    p "OVERALL INTERPRETATION: Lowering the probability cutoff from 50% to 30% increases sensitivity, allowing the model to identify more borrowers who actually default. However, this comes with a reduction in specificity and precision because more borrowers who do not default are classified as potential defaults. This demonstrates the trade-off involved when selecting a probability cutoff for a lending application.";
+p "OVERALL INTERPRETATION: Lowering the probability cutoff from 50% to 30% increases sensitivity, allowing the model to identify more borrowers who actually default. However, this comes with a reduction in specificity and precision because more borrowers who do not default are classified as potential defaults. This demonstrates the trade-off involved when selecting a probability cutoff for a lending application.";
 run;
 
 
-/*====================================AREA UNDER THE CURVE==================================================*/
-proc logistic data=train plots(only)=roc;
-
-    class
-        person_home_ownership (ref="MORTGAGE")
-        loan_intent (ref="PERSONAL")
-        loan_grade (ref="A")
-        cb_person_default_on_file (ref="N");
-
-    model loan_status(event="1") =
-        person_age
-        person_income
-        person_home_ownership
-        person_emp_length
-        loan_intent
-        loan_grade
-        loan_amnt
-        loan_int_rate
-        loan_percent_income
-        cb_person_default_on_file
-        cb_person_cred_hist_length;
-
+/*============================================================================*/
+/* AREA UNDER THE CURVE                                                       */
+/*============================================================================*/
+proc odstext;
+    p "AREA UNDER THE CURVE" / style=[font_size=18pt font_weight=bold];
 run;
-
 ods graphics on;
+
+ods select ROCCurve;
 
 proc logistic data=test_predictions plots(only)=roc;
 
-    model loan_status(event="1") = / nofit;
+title "ROC Curve - Testing Data";
 
-    roc "Testing" pred=P_1;
+model loan_status(event="1") = / nofit;
+
+roc "Testing" pred=P_1;
 
 run;
+
+ods select all;
 
 proc odstext;
 p "AREA UNDER THE CURVE (AUC): The AUC summarises how well the model separates borrowers who default from borrowers who do not default.";
@@ -461,17 +396,25 @@ p "RESULT: The test AUC is 87.07%. This means the model has a fairly strong abil
 p "IMPORTANT: AUC is not the same as accuracy. It evaluates how well the model ranks borrowers by their predicted probability of default across different classification cutoffs.";
 run;
 
+/*============================================================================*/
+/* The Gini Value                                                             */
+/*============================================================================*/
+
+
 data gini_result;
 
-    /* Calculate Gini */
-    Gini = (2 * 0.87066) - 1;
+/* Calculate Gini */
+Gini = (2 * 0.87066) - 1;
 
-    format Gini percent8.2;
+format Gini percent8.2;
 
 run;
 
+proc odstext;
+    p "MODEL'S GINI COEFFICIENT" / style=[font_size=18pt font_weight=bold];
+run;
 proc print data=gini_result noobs;
-    title "Retail Loan Default Risk Modelling Using Logistic Regression";
+title "The Gini Coefficient";
 run;
 
 proc odstext;
