@@ -1,42 +1,60 @@
 ﻿proc import datafile = "C:\Users\karab\Downloads\Retail_Loan_Default_Risk_Model\credit_risk_dataset.csv"
-out = loan_data
-dbms = csv
-replace;
-getnames = yes;
+    out = loan_data
+    dbms = csv
+    replace;
+    getnames = yes;
 run;
 
+
+/* CHECK FOR DUPLICATE OBSERVATIONS                                           */
+proc sort data=loan_data
+    out=loan_data_sorted
+    nodupkey
+    dupout=duplicate_rows;
+    by _all_;
+run;
+
+proc sql;
+    select count(*) as duplicate_count
+    from duplicate_rows;
+quit;
+
+
 /*==========================UNDERSTANDING THE DATA==============================*/
+
 proc means data=loan_data n nmiss mean median min max;
 run;
 
 
-/*==========================FREQUENCIES==============================*/
-proc freq data=loan_data;
-tables loan_status person_home_ownership loan_intent loan_grade cb_person_default_on_file / missing;
+/*==========================REMOVE DUPLICATE VALUES==============================*/
+
+proc sort data=loan_data
+    out=data_clean
+    nodupkey;
+    by _all_;
 run;
 
 
 /*==========================IMPUTING MISSING AND EXTREME VALUES==============================*/
+
 data data_clean;
-set loan_data;
+    set data_clean;
+
 /*===============USE MEDIANS TO IMPUTE BECAUSE WE ARE DEALING WITH SKEWED DATA================*/
-if missing(person_emp_length) then person_emp_length = 4;
-if missing(loan_int_rate) then loan_int_rate = 10.99;
-if person_emp_length = 123 then person_emp_length = 4; 
-if person_age > 100 then person_age = 26;
-run;
 
+    if missing(person_emp_length) then person_emp_length = 4;
+    if missing(loan_int_rate) then loan_int_rate = 10.99;
 
-/*==========================UNDERSTANDING THE DISTRIBUTION OF THE DATA==============================*/
-proc means data=data_clean n nmiss min p1 p5 p25 median p75 p95 p99 max;
-var person_age person_income loan_amnt loan_int_rate loan_percent_income cb_person_cred_hist_length;
+    if person_emp_length = 123 then person_emp_length = 4;
+    if person_age > 100 then person_age = 26;
+
 run;
 
 
 /*==========================FINAL CHECK==============================*/
+
 proc means data=data_clean n nmiss mean median min max;
 run;
-
 /*==========================DONE WITH CLEANING THE DATA==============================*/
 
 
@@ -209,12 +227,10 @@ p "CONCLUSION: INCOME APPEARS TO BE ASSOCIATED WITH DEFAULT. BORROWERS IN THE LO
 run;
 
 
-/*=============================================MODEL FITTING==================================================*/
+/*====================================================MODEL FITTING (LOGISTIC REGRESSION)=========================================================*/
 
-ods select ModelAnova
-           ParameterEstimates
-           OddsRatios
-           Association;
+ods select ParameterEstimates
+ 	 	   Association;
 
 proc logistic data=data_clean;
     
@@ -259,13 +275,11 @@ run;
 /* FIT LOGISTIC REGRESSION USING TRAINING DATA */
 /* THE MODEL LEARNS FROM THE TRAINING DATA ONLY */
 
-ods select ModelAnova
-           ParameterEstimates
-           OddsRatios
-           Association;
+ods select ParameterEstimates
+ 	 	   Association;
 
 proc logistic data=train;
-
+	title "Training Dataset";
     class
         person_home_ownership (ref="MORTGAGE")
         loan_intent (ref="PERSONAL")
@@ -290,10 +304,8 @@ ods select all;
 
 /* APPLY THE TRAINED MODEL TO THE TEST DATA */
 /* CREATE PREDICTED PROBABILITIES OF DEFAULT */
-ods select ModelAnova
-           ParameterEstimates
-           OddsRatios
-           Association;
+ods select ParameterEstimates
+ 	 	   Association;
 
 proc logistic data=train;
 
@@ -321,48 +333,96 @@ proc logistic data=train;
 run;
 ods select all;
 
-proc freq data=test_predictions;
-title "Confusion Matrix";
-tables loan_status * I_loan_status / norow nocol nopercent;
+
+/*====================================================METRICS=========================================================*/
+
+/*============================================================================*/
+/* APPLY 30% PROBABILITY CUTOFF                                               */
+/*============================================================================*/
+
+data cutoff_predictions;
+    set test_predictions;
+
+    /* 30% cutoff */
+    if P_1 >= 0.30 then pred_30 = 1;
+    else pred_30 = 0;
 run;
 
+
+/*============================================================================*/
+/* CONFUSION MATRIX                                                           */
+/*============================================================================*/
+
+proc freq data=cutoff_predictions;
+    tables loan_status * pred_30 / norow nocol nopercent;
+    title "Confusion Matrix - 30% Cutoff";
+run;
+
+proc odstext;
+p "I initially used the standard 50% cutoff, but I noticed the sensitivity was relatively low. I tested lower cutoffs and found that 30% increased sensitivity substantially, so the model could identify more of the borrowers who actually defaulted. I understood that this came at the cost of lower specificity and precision, so I wouldn't say 30% is universally optimal. I used it in the project to illustrate the trade-off and how the cutoff can be adjusted depending on the lending objective.";
+run;
+
+/*============================================================================*/
+/* CALCULATE PERFORMANCE METRICS                                              */
+/*============================================================================*/
+
+proc sql;
+    create table model_metrics_counts as
+    select
+        sum(case when loan_status = 0 and pred_30 = 0 then 1 else 0 end) as TN,
+        sum(case when loan_status = 0 and pred_30 = 1 then 1 else 0 end) as FP,
+        sum(case when loan_status = 1 and pred_30 = 0 then 1 else 0 end) as FN,
+        sum(case when loan_status = 1 and pred_30 = 1 then 1 else 0 end) as TP
+    from cutoff_predictions;
+quit;
+
+
+/*============================================================================*/
+/* CALCULATE METRICS                                                          */
+/*============================================================================*/
+
 data model_metrics;
+    set model_metrics_counts;
 
-    /* Confusion matrix values */
-    TN = 7267;
-    FP = 387;
-    FN = 949;
-    TP = 1171;
-
-    /* Calculate metrics */
     Accuracy    = (TP + TN) / (TN + FP + FN + TP);
     Sensitivity = TP / (TP + FN);
     Specificity = TN / (TN + FP);
     Precision   = TP / (TP + FP);
 
     format Accuracy Sensitivity Specificity Precision percent8.2;
-
 run;
+
+
+/*============================================================================*/
+/* DISPLAY PERFORMANCE METRICS                                                 */
+/*============================================================================*/
 
 proc print data=model_metrics noobs;
     var Accuracy Sensitivity Specificity Precision;
-    title "Loan Default Model Performance Metrics";
+    title "Loan Default Model Performance Metrics - 30% Cutoff";
 run;
+
+
+/*============================================================================*/
+/* INTERPRETATION                                                              */
+/*============================================================================*/
 
 proc odstext;
-    p "ACCURACY: Measures the proportion of all borrowers that the model classified correctly. The model achieved approximately 86.3% accuracy, meaning it correctly classified about 86% of borrowers in the test data.";
+    p "ACCURACY: Measures the proportion of all borrowers that the model classified correctly. Using a 30% probability cutoff, the model correctly classifies approximately 84% of borrowers in the test data.";
 
-    p "SENSITIVITY: Measures how well the model identifies borrowers who actually default. The model achieved approximately 55.2% sensitivity, meaning it correctly identified about 55% of the borrowers who actually defaulted.";
+    p "SENSITIVITY/RECALL: Measures how well the model identifies borrowers who actually default. Using a 30% probability cutoff, the model identifies approximately 73% of borrowers who actually default.";
 
-    p "SPECIFICITY: Measures how well the model identifies borrowers who do not default. The model achieved approximately 94.9% specificity, meaning it correctly identified about 95% of borrowers who did not default.";
+    p "SPECIFICITY: Measures how well the model identifies borrowers who do not default. Using a 30% probability cutoff, the model correctly identifies approximately 88% of borrowers who do not default.";
 
-    p "PRECISION: Measures how often the model is correct when it predicts that a borrower will default. The model achieved approximately 75.2% precision, meaning about 75% of borrowers predicted to default actually defaulted.";
+    p "PRECISION: Measures how often the model is correct when it predicts that a borrower will default. Using a 30% probability cutoff, approximately 62% of borrowers predicted to default actually default.";
 
-    p "OVERALL INTERPRETATION: The model has high specificity but lower sensitivity. This means the model is much better at identifying non-defaulting borrowers than detecting borrowers who actually default. The false negatives should therefore be considered when evaluating the model for lending applications.";
+    p "OVERALL INTERPRETATION: Lowering the probability cutoff from 50% to 30% increases sensitivity, allowing the model to identify more borrowers who actually default. However, this comes with a reduction in specificity and precision because more borrowers who do not default are classified as potential defaults. This demonstrates the trade-off involved when selecting a probability cutoff for a lending application.";
 run;
+
 
 /*====================================AREA UNDER THE CURVE==================================================*/
 proc logistic data=train plots(only)=roc;
+
     class
         person_home_ownership (ref="MORTGAGE")
         loan_intent (ref="PERSONAL")
@@ -382,30 +442,31 @@ proc logistic data=train plots(only)=roc;
         cb_person_default_on_file
         cb_person_cred_hist_length;
 
-    score data=test
-        out=test_roc
-        outroc=roc_data;
+run;
+
+ods graphics on;
+
+proc logistic data=test_predictions plots(only)=roc;
+
+    model loan_status(event="1") = / nofit;
+
+    roc "Testing" pred=P_1;
+
 run;
 
 proc odstext;
-    p "AREA UNDER THE CURVE (AUC): The AUC summarises how well the model separates borrowers who default from borrowers who do not default.";
-
-    p "An AUC of 0.50 means the model is not separating the two groups better than random guessing. An AUC closer to 1.00 indicates stronger separation.";
-
-    p "RESULT: The test AUC is 86.73%. This means the model has a fairly strong ability to separate borrowers who default from borrowers who do not default.";
-
-    p "IMPORTANT: AUC is not the same as accuracy. It evaluates how well the model ranks borrowers by their predicted probability of default across different classification cutoffs.";
+p "AREA UNDER THE CURVE (AUC): The AUC summarises how well the model separates borrowers who default from borrowers who do not default.";
+p "An AUC of 0.50 means the model is not separating the two groups better than random guessing. An AUC closer to 1.00 indicates stronger separation.";
+p "RESULT: The test AUC is 87.07%. This means the model has a fairly strong ability to separate borrowers who default from borrowers who do not default.";
+p "IMPORTANT: AUC is not the same as accuracy. It evaluates how well the model ranks borrowers by their predicted probability of default across different classification cutoffs.";
 run;
 
 data gini_result;
 
-    /* Test AUC from the ROC analysis */
-    AUC = 0.8673;
-
     /* Calculate Gini */
-    Gini = (2 * AUC) - 1;
+    Gini = (2 * 0.87066) - 1;
 
-    format AUC Gini percent8.2;
+    format Gini percent8.2;
 
 run;
 
@@ -414,61 +475,7 @@ proc print data=gini_result noobs;
 run;
 
 proc odstext;
-    p "GINI: Gini is calculated from the AUC using Gini = 2(AUC) - 1. It provides another way of describing how well the model separates borrowers who default from borrowers who do not default.";
-
-    p "RESULT: The test AUC is 86.73%, which gives a Gini value of 73.46%. This indicates that the model has a fairly strong ability to separate borrowers who default from borrowers who do not default.";
-
-    p "IMPORTANT: Gini and AUC are closely related measures. Gini is not a completely separate test of the model. It is another way of expressing the information contained in the AUC.";
-run;
-
-/*=============================RISK SEGMENTATION=======================================*/
-
-data lending_risk;
-
-    set test_predictions;
-
-    /* Predicted probability of default */
-    probability_of_default = P_1;
-
-    /* Classify borrowers into risk groups */
-    if probability_of_default < 0.10 then risk_group = "Low Risk";
-    else if probability_of_default < 0.30 then risk_group = "Medium Risk";
-    else risk_group = "High Risk";
-
-run;
-
-proc sgplot data=lending_risk;
-
-    vbar risk_group /
-        categoryorder=respdesc
-        datalabel;
-
-    title "Borrowers by Predicted Risk Group";
-    xaxis label="Risk Group";
-    yaxis label="Number of Borrowers";
-
-run;
-
-proc sgplot data=risk_performance;
-
-    vbar risk_group /
-        response=actual_default_rate
-        datalabel;
-
-    title "Actual Default Rate by Predicted Risk Group";
-    xaxis label="Risk Group";
-    yaxis label="Actual Default Rate (%)";
-
-run;
-
-proc odstext;
-
-    p "LENDING APPLICATION: The model produces a predicted probability of default for each borrower. These probabilities can be used to segment borrowers into different levels of predicted risk.";
-
-    p "RISK SEGMENTATION: Borrowers with lower predicted probabilities of default are placed into lower-risk groups, while borrowers with higher predicted probabilities are placed into higher-risk groups.";
-
-    p "BUSINESS USE: In a lending environment, predicted risk can be used as one input into decisions such as credit assessment, risk segmentation, pricing and portfolio monitoring. The model probability does not by itself determine whether a loan should be approved or declined.";
-
-    p "KEY IDEA: The purpose of the model is not simply to predict default. It is to provide an estimate of borrower risk that can support the broader lending decision process.";
-
+p "GINI: Gini is calculated from the AUC using Gini = 2(AUC) - 1. It provides another way of describing how well the model separates borrowers who default from borrowers who do not default.";
+p "RESULT: The test AUC is 87.07%, which gives a Gini value of 74.13%. This indicates that the model has a fairly strong ability to separate borrowers who default from borrowers who do not default.";
+p "IMPORTANT: Gini and AUC are closely related measures. Gini is not a completely separate test of the model. It is another way of expressing the information contained in the AUC.";
 run;
